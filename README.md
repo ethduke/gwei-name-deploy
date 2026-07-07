@@ -5,9 +5,9 @@ from a Python command-line tool.
 
 > [!IMPORTANT]
 > This project is an early, unaffiliated community tool for the
-> [Gwei Name Service](https://gwei.domains/). No transaction-writing feature is
-> implemented in the initial scaffold. Test all future write flows on Sepolia
-> before using Ethereum mainnet.
+> [Gwei Name Service](https://gwei.domains/). Transaction-writing features are
+> preview-first and require `--broadcast`. Test the complete workflow on
+> Sepolia before using Ethereum mainnet.
 
 ## Why
 
@@ -26,9 +26,9 @@ Deploy is intended for repeatable operator workflows:
 - [x] Resumable commit/reveal registration
 - [x] IPFS website publishing and rollback history
 - [x] ETH payment links, QR codes, and verification
-- [ ] Operator and security guides
+- [x] Operator and security guides
 
-Planned interface:
+Implemented interface:
 
 ```console
 gwei-name plan alice
@@ -121,6 +121,8 @@ uv run ruff format --check .
 
 Copy `.env.example` to `.env` for local configuration. `.env`, run state,
 commitment secrets, generated sites, and payment artifacts are ignored by Git.
+See the [operator guide](docs/OPERATOR_GUIDE.md) for an end-to-end workflow and
+[security policy](SECURITY.md) for the trust model and reporting process.
 
 ## Configuration
 
