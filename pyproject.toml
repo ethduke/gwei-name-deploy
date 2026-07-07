@@ -20,8 +20,10 @@ classifiers = [
   "Topic :: Internet :: WWW/HTTP",
 ]
 dependencies = [
+  "ens-normalize>=3,<4",
   "rich>=13.9,<15",
   "typer>=0.16,<1",
+  "web3>=7.12,<8",
 ]
 
 [project.scripts]

@@ -18,3 +18,12 @@ def test_version() -> None:
 
     assert result.exit_code == 0
     assert result.stdout.strip() == f"gwei-name {__version__}"
+
+
+def test_plan_requires_rpc(monkeypatch) -> None:
+    monkeypatch.delenv("GWEI_RPC_URL", raising=False)
+
+    result = runner.invoke(app, ["plan", "alice"])
+
+    assert result.exit_code == 2
+    assert "GWEI_RPC_URL is required" in result.output

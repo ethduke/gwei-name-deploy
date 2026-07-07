@@ -22,7 +22,7 @@ Deploy is intended for repeatable operator workflows:
 ## Status and roadmap
 
 - [x] Safe Python CLI scaffold and configuration
-- [ ] Read-only GNS planning and availability checks
+- [x] Read-only GNS planning and availability checks
 - [ ] Resumable commit/reveal registration
 - [ ] IPFS website publishing and rollback history
 - [ ] ETH payment links, QR codes, and verification
@@ -39,6 +39,18 @@ gwei-name launch alice ./website
 gwei-name pay create alice --amount 0.01
 gwei-name pay verify REQUEST_ID TX_HASH
 ```
+
+The implemented read-only planner accepts one name, a newline-delimited text
+file, or a CSV whose first column is `name`:
+
+```console
+gwei-name plan alice --network sepolia --rpc-url "$GWEI_RPC_URL"
+gwei-name plan --file names.csv --json
+```
+
+It reports ENSIP-15 normalization, UTF-8 byte length, deterministic token ID,
+availability, current owner/expiry, fee, expiry premium, and total registration
+value. The total deliberately excludes network gas.
 
 Commands that change chain state will default to dry-run/preview behavior and
 require explicit confirmation before broadcast.
