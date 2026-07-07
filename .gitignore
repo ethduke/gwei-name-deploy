@@ -1,0 +1,23 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.python-version
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local operator state and generated artifacts
+.gwei-name-deploy/
+runs/
+payments/
+site-build/
+*.secrets.json
