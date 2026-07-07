@@ -20,6 +20,7 @@ class Settings:
     private_key: str | None
     state_dir: Path
     ipfs_provider: str | None
+    ipfs_api: str | None
     ipfs_token: str | None
 
     @classmethod
@@ -43,7 +44,8 @@ class Settings:
             rpc_url=_optional_env("GWEI_RPC_URL"),
             private_key=_optional_env("GWEI_PRIVATE_KEY"),
             state_dir=state_dir,
-            ipfs_provider=_optional_env("GWEI_IPFS_PROVIDER"),
+            ipfs_provider=_optional_env("GWEI_IPFS_PROVIDER") or "local",
+            ipfs_api=_optional_env("GWEI_IPFS_API") or "http://127.0.0.1:5001",
             ipfs_token=_optional_env("GWEI_IPFS_TOKEN"),
         )
 

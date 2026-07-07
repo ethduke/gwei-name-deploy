@@ -93,6 +93,23 @@ NAME_NFT_ABI = [
         ],
         "outputs": [{"name": "tokenId", "type": "uint256"}],
     },
+    {
+        "type": "function",
+        "name": "contenthash",
+        "stateMutability": "view",
+        "inputs": [{"name": "tokenId", "type": "uint256"}],
+        "outputs": [{"name": "hash", "type": "bytes"}],
+    },
+    {
+        "type": "function",
+        "name": "setContenthash",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "tokenId", "type": "uint256"},
+            {"name": "hash", "type": "bytes"},
+        ],
+        "outputs": [],
+    },
 ]
 
 
@@ -174,6 +191,9 @@ class Web3GnsReader:
         except (ContractLogicError, ValueError):
             return None
 
+    def contenthash(self, token_id: int) -> bytes:
+        return bytes(self.contract.functions.contenthash(token_id).call())
+
 
 class Web3GnsWriter(Web3GnsReader):
     """Locally signed GNS transactions with receipt verification."""
@@ -216,6 +236,11 @@ class Web3GnsWriter(Web3GnsReader):
         return self._broadcast(
             self.contract.functions.reveal(label, bytes.fromhex(secret[2:])),
             value=value,
+        )
+
+    def broadcast_contenthash(self, token_id: int, contenthash: bytes) -> str:
+        return self._broadcast(
+            self.contract.functions.setContenthash(token_id, contenthash)
         )
 
     def wait_transaction(self, tx_hash: str) -> TransactionResult:

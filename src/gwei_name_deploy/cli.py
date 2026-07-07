@@ -11,8 +11,21 @@ from rich.table import Table
 from gwei_name_deploy import __version__
 from gwei_name_deploy.config import ConfigurationError, Settings
 from gwei_name_deploy.constants import NETWORKS
-from gwei_name_deploy.gns import GnsError, Web3GnsReader, Web3GnsWriter, plan_name
+from gwei_name_deploy.gns import (
+    GnsError,
+    Web3GnsReader,
+    Web3GnsWriter,
+    normalize_top_level_name,
+    plan_name,
+)
+from gwei_name_deploy.history import HistoryError, HistoryStore
 from gwei_name_deploy.inputs import InputError, collect_names
+from gwei_name_deploy.ipfs import (
+    IpfsError,
+    build_manifest,
+    create_uploader,
+    encode_ipfs_contenthash,
+)
 from gwei_name_deploy.models import NamePlan
 from gwei_name_deploy.registration import (
     RegistrationError,
@@ -238,6 +251,198 @@ def resume_command(
         console.print("Run advanced; invoke resume again to continue.")
 
 
+@app.command("publish")
+def publish_command(
+    name: Annotated[str, typer.Argument(help="Registered top-level .gwei name.")],
+    site_dir: Annotated[Path, typer.Argument(help="Static site directory.")],
+    provider: Annotated[
+        str | None,
+        typer.Option(help="IPFS provider: local or pinata."),
+    ] = None,
+    network_name: Annotated[
+        str | None, typer.Option("--network", help="Use sepolia or mainnet.")
+    ] = None,
+    rpc_url: Annotated[
+        str | None,
+        typer.Option("--rpc-url", envvar="GWEI_RPC_URL", help="Ethereum RPC URL."),
+    ] = None,
+    broadcast: Annotated[
+        bool,
+        typer.Option(help="Upload the site and update the on-chain contenthash."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip the final publish confirmation."),
+    ] = False,
+) -> None:
+    """Upload a static website to IPFS and set its GNS contenthash."""
+    try:
+        settings = Settings.from_env()
+        selected_network = _network_name(network_name, settings)
+        network = NETWORKS[selected_network]
+        manifest = build_manifest(site_dir)
+        endpoint = rpc_url or settings.require_rpc_url()
+        reader = Web3GnsReader(endpoint, network)
+        plan = plan_name(reader, name)
+        if plan.available or plan.owner is None:
+            raise IpfsError(f"{plan.name} is not an active registered name")
+    except (ConfigurationError, GnsError, IpfsError, OSError) as exc:
+        _fail(exc)
+
+    console.print(
+        f"Site: [bold]{manifest.root}[/bold] ({len(manifest.files)} files, "
+        f"{manifest.total_bytes} bytes)"
+    )
+    console.print(f"Target: [bold]{plan.name}[/bold] owned by {plan.owner}")
+    if not broadcast:
+        console.print(
+            "[yellow]Dry run only.[/yellow] Add --broadcast to upload and publish."
+        )
+        return
+
+    try:
+        writer = Web3GnsWriter(endpoint, network, settings.require_private_key())
+        if writer.address.lower() != plan.owner.lower():
+            raise IpfsError(
+                f"signer {writer.address} does not own {plan.name} ({plan.owner})"
+            )
+        _confirm_publish(selected_network, plan.name, manifest.total_bytes, yes)
+        uploader = create_uploader(
+            provider or settings.ipfs_provider or "local",
+            settings.ipfs_api,
+            settings.ipfs_token,
+        )
+        cid = uploader.upload(manifest, plan.name)
+        contenthash = encode_ipfs_contenthash(cid)
+        tx_hash = writer.broadcast_contenthash(plan.token_id, contenthash)
+        writer.wait_transaction(tx_hash)
+        history = HistoryStore(settings.state_dir)
+        revision = history.record_revision(
+            network.chain_id,
+            plan.name,
+            plan.token_id,
+            cid,
+            contenthash,
+            tx_hash,
+        )
+        history.upsert_address_name(network.chain_id, writer.address, plan.name)
+    except (
+        ConfigurationError,
+        GnsError,
+        HistoryError,
+        IpfsError,
+        OSError,
+    ) as exc:
+        _fail(exc)
+
+    console.print(f"[green]Published revision {revision.revision_id}.[/green]")
+    console.print(f"CID: {cid}")
+    console.print(f"Gateway: https://{plan.label}.gwei.domains")
+    console.print(f"Transaction: {network.explorer_url}/tx/{tx_hash}")
+
+
+@app.command("site-history")
+def site_history_command(
+    name: Annotated[str, typer.Argument(help="Top-level .gwei name.")],
+    network_name: Annotated[
+        str | None, typer.Option("--network", help="Use sepolia or mainnet.")
+    ] = None,
+) -> None:
+    """Show locally recorded successful website revisions."""
+    try:
+        settings = Settings.from_env()
+        selected_network = _network_name(network_name, settings)
+        label, normalized = normalize_top_level_name(name)
+        revisions = HistoryStore(settings.state_dir).list_revisions(
+            NETWORKS[selected_network].chain_id, normalized
+        )
+    except (ConfigurationError, HistoryError, GnsError, OSError) as exc:
+        _fail(exc)
+
+    table = Table(title=f"Site history: {label}.gwei ({selected_network})")
+    table.add_column("Revision", justify="right")
+    table.add_column("CID")
+    table.add_column("Created")
+    table.add_column("Transaction")
+    for revision in revisions:
+        table.add_row(
+            str(revision.revision_id),
+            revision.cid,
+            revision.created_at,
+            revision.tx_hash,
+        )
+    console.print(table)
+    if not revisions:
+        console.print("[dim]No locally recorded revisions.[/dim]")
+
+
+@app.command("rollback")
+def rollback_command(
+    name: Annotated[str, typer.Argument(help="Registered top-level .gwei name.")],
+    revision_id: Annotated[int, typer.Argument(help="Local revision to restore.")],
+    network_name: Annotated[
+        str | None, typer.Option("--network", help="Use sepolia or mainnet.")
+    ] = None,
+    rpc_url: Annotated[
+        str | None,
+        typer.Option("--rpc-url", envvar="GWEI_RPC_URL", help="Ethereum RPC URL."),
+    ] = None,
+    broadcast: Annotated[
+        bool, typer.Option(help="Update the on-chain contenthash.")
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip the final rollback confirmation."),
+    ] = False,
+) -> None:
+    """Restore a previously recorded IPFS website revision."""
+    try:
+        settings = Settings.from_env()
+        selected_network = _network_name(network_name, settings)
+        network = NETWORKS[selected_network]
+        history = HistoryStore(settings.state_dir)
+        revision = history.get_revision(revision_id)
+        _, normalized = normalize_top_level_name(name)
+        if revision.chain_id != network.chain_id or revision.name != normalized:
+            raise HistoryError("revision does not belong to this name and network")
+        contenthash = bytes.fromhex(revision.contenthash_hex[2:])
+        endpoint = rpc_url or settings.require_rpc_url()
+        reader = Web3GnsReader(endpoint, network)
+        plan = plan_name(reader, normalized)
+        if plan.owner is None:
+            raise HistoryError(f"{normalized} has no active owner")
+    except (ConfigurationError, GnsError, HistoryError, OSError) as exc:
+        _fail(exc)
+
+    console.print(f"Restore {normalized} to revision {revision_id}: {revision.cid}")
+    if not broadcast:
+        console.print(
+            "[yellow]Dry run only.[/yellow] Add --broadcast to update contenthash."
+        )
+        return
+
+    try:
+        writer = Web3GnsWriter(endpoint, network, settings.require_private_key())
+        if writer.address.lower() != plan.owner.lower():
+            raise HistoryError(f"signer {writer.address} does not own {normalized}")
+        _confirm_publish(selected_network, normalized, 0, yes)
+        tx_hash = writer.broadcast_contenthash(plan.token_id, contenthash)
+        writer.wait_transaction(tx_hash)
+        restored = history.record_revision(
+            network.chain_id,
+            normalized,
+            plan.token_id,
+            revision.cid,
+            contenthash,
+            tx_hash,
+        )
+    except (ConfigurationError, GnsError, HistoryError) as exc:
+        _fail(exc)
+
+    console.print(f"[green]Restored as revision {restored.revision_id}.[/green]")
+    console.print(f"Transaction: {network.explorer_url}/tx/{tx_hash}")
+
+
 def _render_plans(plans: list[NamePlan], network: str) -> None:
     table = Table(title=f"GNS registration plan ({network})")
     table.add_column("Name", style="bold")
@@ -308,6 +513,16 @@ def _confirm_broadcast(network: str, count: int, assume_yes: bool) -> None:
     )
     if not confirmed:
         raise RegistrationError("broadcast cancelled")
+
+
+def _confirm_publish(
+    network: str, name: str, total_bytes: int, assume_yes: bool
+) -> None:
+    if assume_yes:
+        return
+    suffix = f" after uploading {total_bytes} bytes" if total_bytes else ""
+    if not typer.confirm(f"Update {name} on {network}{suffix}?"):
+        raise IpfsError("publish cancelled")
 
 
 def _fail(exc: Exception) -> None:

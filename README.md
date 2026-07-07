@@ -24,7 +24,7 @@ Deploy is intended for repeatable operator workflows:
 - [x] Safe Python CLI scaffold and configuration
 - [x] Read-only GNS planning and availability checks
 - [x] Resumable commit/reveal registration
-- [ ] IPFS website publishing and rollback history
+- [x] IPFS website publishing and rollback history
 - [ ] ETH payment links, QR codes, and verification
 - [ ] Operator and security guides
 
@@ -35,7 +35,6 @@ gwei-name plan alice
 gwei-name register alice
 gwei-name register --file names.csv
 gwei-name publish alice ./website
-gwei-name launch alice ./website
 gwei-name pay create alice --amount 0.01
 gwei-name pay verify REQUEST_ID TX_HASH
 ```
@@ -70,6 +69,28 @@ Use `--file names.csv` for a batch and `--max-registration-eth` to enforce a
 hard cap on registration value. Each top-level reveal must be sent directly by
 the intended owner because the GNS contract binds and mints to `msg.sender`.
 
+Website publishing supports a local Kubo node or Pinata. It refuses symlinks,
+environment files, private-key-like files, and directories without a root
+`index.html`:
+
+```console
+# Inspect files and ownership without uploading
+gwei-name publish alice examples/minimal-site --network sepolia
+
+# Publish through local Kubo (localhost:5001 by default)
+gwei-name publish alice ./website --broadcast
+
+# Or use Pinata with GWEI_IPFS_TOKEN set
+gwei-name publish alice ./website --provider pinata --broadcast
+
+gwei-name site-history alice
+gwei-name rollback alice REVISION_ID --broadcast
+```
+
+Successful contenthash transactions are recorded in an owner-only SQLite
+database. The address-to-name cache is public data and also uses SQLite; wallet
+private keys and commit secrets are never stored there.
+
 Commands that change chain state will default to dry-run/preview behavior and
 require explicit confirmation before broadcast.
 
@@ -96,13 +117,14 @@ commitment secrets, generated sites, and payment artifacts are ignored by Git.
 | `GWEI_RPC_URL` | Ethereum JSON-RPC endpoint |
 | `GWEI_PRIVATE_KEY` | Local transaction signer; never pass via CLI |
 | `GWEI_STATE_DIR` | Optional local state directory override |
-| `GWEI_IPFS_PROVIDER` | Planned IPFS adapter selection |
-| `GWEI_IPFS_TOKEN` | Planned provider token; never commit it |
+| `GWEI_IPFS_PROVIDER` | IPFS adapter: `local` or `pinata` |
+| `GWEI_IPFS_API` | Local Kubo RPC; localhost only |
+| `GWEI_IPFS_TOKEN` | Pinata JWT; never commit it |
 
 ## Storage and key safety
 
-An address-to-name mapping is public blockchain data. The planned local cache
-will use SQLite keyed by `(chain_id, checksummed_address)`, which provides
+An address-to-name mapping is public blockchain data. The local cache uses
+SQLite keyed by `(chain_id, checksummed_address)`, which provides
 atomic updates and useful indexing without pretending the data needs secrecy.
 
 Private keys will **never** be stored in SQLite. The MVP reads a key from the
