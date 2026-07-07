@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from ens_normalize import ens_normalize
+from eth_account import Account
 from web3 import Web3
 from web3.contract import Contract
 from web3.exceptions import ContractLogicError
@@ -56,6 +58,41 @@ NAME_NFT_ABI = [
         "inputs": [{"name": "tokenId", "type": "uint256"}],
         "outputs": [{"name": "owner", "type": "address"}],
     },
+    {
+        "type": "function",
+        "name": "makeCommitment",
+        "stateMutability": "pure",
+        "inputs": [
+            {"name": "label", "type": "string"},
+            {"name": "owner", "type": "address"},
+            {"name": "secret", "type": "bytes32"},
+        ],
+        "outputs": [{"name": "commitment", "type": "bytes32"}],
+    },
+    {
+        "type": "function",
+        "name": "commitments",
+        "stateMutability": "view",
+        "inputs": [{"name": "commitment", "type": "bytes32"}],
+        "outputs": [{"name": "timestamp", "type": "uint256"}],
+    },
+    {
+        "type": "function",
+        "name": "commit",
+        "stateMutability": "nonpayable",
+        "inputs": [{"name": "commitment", "type": "bytes32"}],
+        "outputs": [],
+    },
+    {
+        "type": "function",
+        "name": "reveal",
+        "stateMutability": "payable",
+        "inputs": [
+            {"name": "label", "type": "string"},
+            {"name": "secret", "type": "bytes32"},
+        ],
+        "outputs": [{"name": "tokenId", "type": "uint256"}],
+    },
 ]
 
 
@@ -83,6 +120,13 @@ class GnsReader(Protocol):
     def in_grace(self, token_id: int) -> bool: ...
 
     def owner(self, token_id: int) -> str | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionResult:
+    tx_hash: str
+    block_number: int
+    block_timestamp: int
 
 
 class Web3GnsReader:
@@ -129,6 +173,85 @@ class Web3GnsReader:
             )
         except (ContractLogicError, ValueError):
             return None
+
+
+class Web3GnsWriter(Web3GnsReader):
+    """Locally signed GNS transactions with receipt verification."""
+
+    def __init__(
+        self,
+        rpc_url: str,
+        network: Network,
+        private_key: str,
+        timeout: float = 20.0,
+    ) -> None:
+        super().__init__(rpc_url, network, timeout=timeout)
+        try:
+            self.account = Account.from_key(private_key)
+        except Exception as exc:
+            raise GnsError(
+                "GWEI_PRIVATE_KEY is not a valid Ethereum private key"
+            ) from exc
+
+    @property
+    def address(self) -> str:
+        return Web3.to_checksum_address(self.account.address)
+
+    def make_commitment(self, label: str, secret: str) -> str:
+        value = self.contract.functions.makeCommitment(
+            label, self.address, bytes.fromhex(secret[2:])
+        ).call()
+        return Web3.to_hex(value)
+
+    def commitment_time(self, commitment: str) -> int:
+        return int(self.contract.functions.commitments(commitment).call())
+
+    def latest_timestamp(self) -> int:
+        return int(self.web3.eth.get_block("latest")["timestamp"])
+
+    def broadcast_commit(self, commitment: str) -> str:
+        return self._broadcast(self.contract.functions.commit(commitment))
+
+    def broadcast_reveal(self, label: str, secret: str, value: int) -> str:
+        return self._broadcast(
+            self.contract.functions.reveal(label, bytes.fromhex(secret[2:])),
+            value=value,
+        )
+
+    def wait_transaction(self, tx_hash: str) -> TransactionResult:
+        try:
+            receipt = self.web3.eth.wait_for_transaction_receipt(
+                tx_hash, timeout=180, poll_latency=2
+            )
+        except Exception as exc:
+            raise GnsError(f"transaction did not confirm: {exc}") from exc
+
+        if receipt["status"] != 1:
+            raise GnsError(f"transaction reverted: {tx_hash}")
+        block = self.web3.eth.get_block(receipt["blockNumber"])
+        return TransactionResult(
+            tx_hash=tx_hash,
+            block_number=int(receipt["blockNumber"]),
+            block_timestamp=int(block["timestamp"]),
+        )
+
+    def _broadcast(self, function, value: int = 0) -> str:
+        try:
+            transaction = function.build_transaction(
+                {
+                    "from": self.address,
+                    "nonce": self.web3.eth.get_transaction_count(
+                        self.address, "pending"
+                    ),
+                    "chainId": self.network.chain_id,
+                    "value": value,
+                }
+            )
+            signed = self.account.sign_transaction(transaction)
+            tx_hash = self.web3.eth.send_raw_transaction(signed.raw_transaction)
+        except Exception as exc:
+            raise GnsError(f"transaction could not be broadcast: {exc}") from exc
+        return Web3.to_hex(tx_hash)
 
 
 def normalize_top_level_name(value: str) -> tuple[str, str]:

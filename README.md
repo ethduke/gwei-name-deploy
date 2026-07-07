@@ -23,7 +23,7 @@ Deploy is intended for repeatable operator workflows:
 
 - [x] Safe Python CLI scaffold and configuration
 - [x] Read-only GNS planning and availability checks
-- [ ] Resumable commit/reveal registration
+- [x] Resumable commit/reveal registration
 - [ ] IPFS website publishing and rollback history
 - [ ] ETH payment links, QR codes, and verification
 - [ ] Operator and security guides
@@ -51,6 +51,24 @@ gwei-name plan --file names.csv --json
 It reports ENSIP-15 normalization, UTF-8 byte length, deterministic token ID,
 availability, current owner/expiry, fee, expiry premium, and total registration
 value. The total deliberately excludes network gas.
+
+Registration is split so no process must remain alive during the commit/reveal
+delay:
+
+```console
+# Preview only (default)
+gwei-name register alice --network sepolia
+
+# Sign and send the commitment; writes an owner-only recovery file
+gwei-name register alice --network sepolia --broadcast
+
+# After 60 seconds, recover the run and reveal
+gwei-name resume RUN_ID --broadcast
+```
+
+Use `--file names.csv` for a batch and `--max-registration-eth` to enforce a
+hard cap on registration value. Each top-level reveal must be sent directly by
+the intended owner because the GNS contract binds and mints to `msg.sender`.
 
 Commands that change chain state will default to dry-run/preview behavior and
 require explicit confirmation before broadcast.
