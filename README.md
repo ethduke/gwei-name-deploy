@@ -87,9 +87,9 @@ gwei-name site-history alice
 gwei-name rollback alice REVISION_ID --broadcast
 ```
 
-Successful contenthash transactions are recorded in an owner-only SQLite
-database. The address-to-name cache is public data and also uses SQLite; wallet
-private keys and commit secrets are never stored there.
+Successful contenthash transactions and the address-to-name mapping are stored
+in small owner-only JSON files. Wallet private keys and commit secrets are never
+stored there.
 
 Payment requests resolve the name's configured ETH address, encode an exact
 amount as a chain-specific [ERC-681](https://eips.ethereum.org/EIPS/eip-681)
@@ -102,7 +102,7 @@ gwei-name pay verify REQUEST_ID TX_HASH
 
 Verification requires a successful, confirmed transaction whose recipient and
 wei value exactly match the original request. Requests, status, and transaction
-hashes are stored in owner-only local SQLite; the QR PNG is also owner-only.
+hashes are stored in owner-only local JSON; the QR PNG is also owner-only.
 
 Commands that change chain state will default to dry-run/preview behavior and
 require explicit confirmation before broadcast.
@@ -114,7 +114,6 @@ Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```console
 uv sync --dev
 uv run gwei-name --help
-uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```
@@ -138,15 +137,16 @@ See the [operator guide](docs/OPERATOR_GUIDE.md) for an end-to-end workflow and
 
 ## Storage and key safety
 
-An address-to-name mapping is public blockchain data. The local cache uses
-SQLite keyed by `(chain_id, checksummed_address)`, which provides
-atomic updates and useful indexing without pretending the data needs secrecy.
+An address-to-name mapping is public blockchain data. `address_book.json` is a
+direct JSON key-value mapping such as
+`"1:0x1234...": "alice.gwei"`. Including the chain ID avoids collisions across
+networks while keeping the file easy to inspect and back up.
 
-Private keys will **never** be stored in SQLite. The MVP reads a key from the
-process environment and signs locally; encrypted JSON keystores or the OS
-keychain are the preferred next signer backends. Commit/reveal secrets are not
-wallet keys, but losing them prevents reveal, so resumable runs will store them
-in owner-only (`0600`) local state and exclude them from Git.
+Private keys will **never** be stored in these JSON files. The MVP reads a key
+from the process environment and signs locally; encrypted JSON keystores or the
+OS keychain are the preferred next signer backends. Commit/reveal secrets are
+not wallet keys, but losing them prevents reveal, so resumable runs will store
+them in owner-only (`0600`) local state and exclude them from Git.
 
 ## GNS deployments
 

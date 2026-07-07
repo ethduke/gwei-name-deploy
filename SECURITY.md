@@ -33,8 +33,9 @@ real secret, even privately.
 - Registration recovery files contain random commitment secrets. They are
   created as owner-only files and excluded from Git, but any process running as
   the same OS user may still read them.
-- `history.sqlite3` stores public address/name mappings and site history.
-  `payments.sqlite3` stores recipient addresses, amounts, and transaction
+- `address_book.json` stores the public address/name mapping and
+  `site_history.json` stores publishing history. `payments.json` stores
+  recipient addresses, amounts, and transaction
   hashes. Both are owner-only to limit local metadata exposure, but neither is
   suitable for wallet keys or API credentials.
 - Pinata tokens stay in the environment. Local Kubo RPC endpoints are accepted

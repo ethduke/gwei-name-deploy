@@ -34,17 +34,11 @@ gwei-name = "gwei_name_deploy.cli:app"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.3,<10",
   "ruff>=0.12,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gwei_name_deploy"]
-
-[tool.pytest.ini_options]
-addopts = "-q"
-pythonpath = ["src"]
-testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 88

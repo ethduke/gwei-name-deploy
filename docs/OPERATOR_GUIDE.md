@@ -147,21 +147,21 @@ The state directory contains:
 | Path | Contents | Sensitivity |
 | --- | --- | --- |
 | `runs/*.json` | Commitment secrets and registration progress | Secret |
-| `history.sqlite3` | Public address/name cache and site revisions | Private metadata |
-| `payments.sqlite3` | Payment requests and transaction hashes | Private metadata |
+| `address_book.json` | Direct `chain:address` to name mapping | Public data |
+| `site_history.json` | Published site revisions | Private metadata |
+| `payments.json` | Payment requests and transaction hashes | Private metadata |
 | `payments/*.png` | Payment QR codes | Private metadata |
 
 Directories are set to `0700` and files to `0600`. Preserve those permissions
-in backups. SQLite is appropriate for the public `(chain_id, address) -> name`
-cache because it gives atomic updates and indexed lookup. It is not a wallet:
-never put private keys, seed phrases, or Pinata tokens in either database.
+in backups. `address_book.json` uses a direct JSON
+`"chain_id:address": "name.gwei"` mapping. It is not a wallet: never put private
+keys, seed phrases, or Pinata tokens in either state file.
 
 Before upgrading, back up the complete state directory to encrypted storage.
 After upgrading, run:
 
 ```console
 uv sync --dev
-uv run pytest
 uv run ruff check .
 uv run ruff format --check .
 ```

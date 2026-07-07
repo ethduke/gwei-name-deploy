@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-import os
 import re
-import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import qrcode
+
+from gwei_name_deploy.json_store import JsonStoreError, load_json, save_json
 
 REQUEST_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
@@ -75,123 +75,88 @@ def verify_payment_transaction(
 
 
 class PaymentStore:
+    """Owner-only JSON store for a small number of payment requests."""
+
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir
-        self.path = state_dir / "payments.sqlite3"
+        self.path = state_dir / "payments.json"
 
     def create(
         self, chain_id: int, name: str, recipient: str, amount_wei: int
     ) -> PaymentRequest:
-        self.initialize()
-        request_id = uuid.uuid4().hex
-        created_at = datetime.now(tz=UTC).isoformat()
-        uri = build_payment_uri(recipient, chain_id, amount_wei)
-        with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO payment_requests
-                    (request_id, chain_id, name, recipient, amount_wei, uri,
-                     created_at, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'open')
-                """,
-                (
-                    request_id,
-                    chain_id,
-                    name,
-                    recipient.lower(),
-                    str(amount_wei),
-                    uri,
-                    created_at,
-                ),
-            )
-        return self.get(request_id)
+        state = self._load()
+        request = PaymentRequest(
+            request_id=uuid.uuid4().hex,
+            chain_id=chain_id,
+            name=name,
+            recipient=recipient,
+            amount_wei=amount_wei,
+            uri=build_payment_uri(recipient, chain_id, amount_wei),
+            created_at=datetime.now(tz=UTC).isoformat(),
+            status="open",
+            tx_hash=None,
+            verified_at=None,
+            block_number=None,
+        )
+        state["requests"][request.request_id] = asdict(request)
+        self._save(state)
+        return request
 
     def get(self, request_id: str) -> PaymentRequest:
-        self.initialize()
         _validate_request_id(request_id)
-        with self._connect() as connection:
-            row = connection.execute(
-                """
-                SELECT request_id, chain_id, name, recipient, amount_wei, uri,
-                       created_at, status, tx_hash, verified_at, block_number
-                FROM payment_requests WHERE request_id = ?
-                """,
-                (request_id,),
-            ).fetchone()
-        if row is None:
+        item = self._load()["requests"].get(request_id)
+        if item is None:
             raise PaymentError(f"payment request not found: {request_id}")
-        values = list(row)
-        values[4] = int(values[4])
-        return PaymentRequest(*values)
+        try:
+            return PaymentRequest(**item)
+        except TypeError as exc:
+            raise PaymentError(f"invalid payment request: {request_id}") from exc
 
     def mark_paid(
         self, request_id: str, tx_hash: str, block_number: int
     ) -> PaymentRequest:
-        self.initialize()
         _validate_request_id(request_id)
-        verified_at = datetime.now(tz=UTC).isoformat()
-        try:
-            with self._connect() as connection:
-                cursor = connection.execute(
-                    """
-                    UPDATE payment_requests
-                    SET status = 'paid', tx_hash = ?, verified_at = ?, block_number = ?
-                    WHERE request_id = ? AND status = 'open'
-                    """,
-                    (tx_hash.lower(), verified_at, block_number, request_id),
-                )
-                if cursor.rowcount != 1:
-                    raise PaymentError("payment request is already satisfied")
-        except sqlite3.IntegrityError as exc:
+        state = self._load()
+        item = state["requests"].get(request_id)
+        if item is None:
+            raise PaymentError(f"payment request not found: {request_id}")
+        if item.get("status") != "open":
+            raise PaymentError("payment request is already satisfied")
+        if any(
+            request.get("tx_hash", "").lower() == tx_hash.lower()
+            for request in state["requests"].values()
+            if request.get("tx_hash")
+        ):
             raise PaymentError(
                 "transaction hash already satisfies another payment request"
-            ) from exc
-        return self.get(request_id)
+            )
+        item.update(
+            status="paid",
+            tx_hash=tx_hash.lower(),
+            verified_at=datetime.now(tz=UTC).isoformat(),
+            block_number=block_number,
+        )
+        self._save(state)
+        return PaymentRequest(**item)
 
     def qr_path(self, request_id: str) -> Path:
         _validate_request_id(request_id)
         return self.state_dir / "payments" / f"{request_id}.png"
 
-    def initialize(self) -> None:
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.path.parent.chmod(0o700)
-        if not self.path.exists():
-            try:
-                descriptor = os.open(
-                    self.path,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                )
-                os.close(descriptor)
-            except FileExistsError:
-                pass
-            except OSError as exc:
-                raise PaymentError(f"could not create payment database: {exc}") from exc
-        self.path.chmod(0o600)
-        with self._connect() as connection:
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS payment_requests (
-                    request_id TEXT PRIMARY KEY,
-                    chain_id INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    recipient TEXT NOT NULL,
-                    amount_wei TEXT NOT NULL,
-                    uri TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK (status IN ('open', 'paid')),
-                    tx_hash TEXT UNIQUE,
-                    verified_at TEXT,
-                    block_number INTEGER
-                );
-                """
-            )
-
-    def _connect(self) -> sqlite3.Connection:
+    def _load(self) -> dict:
         try:
-            return sqlite3.connect(self.path)
-        except (OSError, sqlite3.Error) as exc:
-            raise PaymentError(f"could not open payment database: {exc}") from exc
+            state = load_json(self.path, {"version": 1, "requests": {}})
+            if not isinstance(state.get("requests"), dict):
+                raise PaymentError(f"invalid payment state: {self.path}")
+            return state
+        except JsonStoreError as exc:
+            raise PaymentError(str(exc)) from exc
+
+    def _save(self, state: dict) -> None:
+        try:
+            save_json(self.path, state)
+        except JsonStoreError as exc:
+            raise PaymentError(str(exc)) from exc
 
 
 def _validate_request_id(request_id: str) -> None:
