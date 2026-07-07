@@ -10,7 +10,7 @@ from rich.table import Table
 
 from gwei_name_deploy import __version__
 from gwei_name_deploy.config import ConfigurationError, Settings
-from gwei_name_deploy.constants import NETWORKS
+from gwei_name_deploy.constants import NETWORKS, Network
 from gwei_name_deploy.gns import (
     GnsError,
     Web3GnsReader,
@@ -27,6 +27,13 @@ from gwei_name_deploy.ipfs import (
     encode_ipfs_contenthash,
 )
 from gwei_name_deploy.models import NamePlan
+from gwei_name_deploy.payments import (
+    PaymentError,
+    PaymentStore,
+    parse_eth_amount,
+    verify_payment_transaction,
+    write_qr_code,
+)
 from gwei_name_deploy.registration import (
     RegistrationError,
     commit_pending,
@@ -41,6 +48,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+pay_app = typer.Typer(help="Create and verify exact-value ETH payment requests.")
+app.add_typer(pay_app, name="pay")
 console = Console()
 error_console = Console(stderr=True)
 
@@ -443,6 +452,89 @@ def rollback_command(
     console.print(f"Transaction: {network.explorer_url}/tx/{tx_hash}")
 
 
+@pay_app.command("create")
+def payment_create_command(
+    name: Annotated[str, typer.Argument(help="Registered top-level .gwei name.")],
+    amount: Annotated[
+        str,
+        typer.Option("--amount", help="Exact ETH amount requested."),
+    ],
+    network_name: Annotated[
+        str | None, typer.Option("--network", help="Use sepolia or mainnet.")
+    ] = None,
+    rpc_url: Annotated[
+        str | None,
+        typer.Option("--rpc-url", envvar="GWEI_RPC_URL", help="Ethereum RPC URL."),
+    ] = None,
+) -> None:
+    """Resolve a .gwei name and create an ERC-681 payment QR code."""
+    try:
+        settings = Settings.from_env()
+        selected_network = _network_name(network_name, settings)
+        network = NETWORKS[selected_network]
+        reader = Web3GnsReader(rpc_url or settings.require_rpc_url(), network)
+        plan = plan_name(reader, name)
+        if plan.available or plan.owner is None:
+            raise PaymentError(f"{plan.name} is not an active registered name")
+        recipient = reader.resolved_address(plan.token_id)
+        if recipient is None:
+            raise PaymentError(f"{plan.name} does not resolve to an ETH address")
+        amount_wei = parse_eth_amount(amount)
+        store = PaymentStore(settings.state_dir)
+        request = store.create(network.chain_id, plan.name, recipient, amount_wei)
+        qr_path = store.qr_path(request.request_id)
+        write_qr_code(request.uri, qr_path)
+        HistoryStore(settings.state_dir).upsert_address_name(
+            network.chain_id, recipient, plan.name
+        )
+    except (
+        ConfigurationError,
+        GnsError,
+        HistoryError,
+        OSError,
+        PaymentError,
+    ) as exc:
+        _fail(exc)
+
+    console.print(f"[green]Payment request {request.request_id} created.[/green]")
+    console.print(f"Name: {request.name}")
+    console.print(f"Recipient: {request.recipient}")
+    console.print(f"Amount: {_format_eth(request.amount_wei)} ETH")
+    console.print(f"URI: {request.uri}")
+    console.print(f"QR code: {qr_path}")
+
+
+@pay_app.command("verify")
+def payment_verify_command(
+    request_id: Annotated[str, typer.Argument(help="Local payment request ID.")],
+    tx_hash: Annotated[str, typer.Argument(help="Ethereum transaction hash.")],
+    rpc_url: Annotated[
+        str | None,
+        typer.Option("--rpc-url", envvar="GWEI_RPC_URL", help="Ethereum RPC URL."),
+    ] = None,
+) -> None:
+    """Verify that a confirmed transaction exactly satisfies a request."""
+    try:
+        settings = Settings.from_env()
+        store = PaymentStore(settings.state_dir)
+        request = store.get(request_id)
+        network = _network_for_chain_id(request.chain_id)
+        reader = Web3GnsReader(rpc_url or settings.require_rpc_url(), network)
+        try:
+            transaction = dict(reader.web3.eth.get_transaction(tx_hash))
+            receipt = dict(reader.web3.eth.get_transaction_receipt(tx_hash))
+        except Exception as exc:
+            raise PaymentError(f"could not load transaction {tx_hash}: {exc}") from exc
+        block_number = verify_payment_transaction(request, transaction, receipt)
+        paid = store.mark_paid(request_id, tx_hash, block_number)
+    except (ConfigurationError, GnsError, OSError, PaymentError) as exc:
+        _fail(exc)
+
+    console.print(f"[green]Payment verified in block {paid.block_number}.[/green]")
+    console.print(f"Request: {paid.request_id}")
+    console.print(f"Transaction: {network.explorer_url}/tx/{paid.tx_hash}")
+
+
 def _render_plans(plans: list[NamePlan], network: str) -> None:
     table = Table(title=f"GNS registration plan ({network})")
     table.add_column("Name", style="bold")
@@ -485,6 +577,13 @@ def _network_name(requested: str | None, settings: Settings) -> str:
             f"unsupported network {selected!r}; choose mainnet or sepolia"
         )
     return selected
+
+
+def _network_for_chain_id(chain_id: int) -> Network:
+    for network in NETWORKS.values():
+        if network.chain_id == chain_id:
+            return network
+    raise PaymentError(f"unsupported payment request chain ID: {chain_id}")
 
 
 def _ensure_registration_budget(plans: list[NamePlan], maximum_eth: str | None) -> None:

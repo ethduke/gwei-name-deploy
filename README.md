@@ -25,7 +25,7 @@ Deploy is intended for repeatable operator workflows:
 - [x] Read-only GNS planning and availability checks
 - [x] Resumable commit/reveal registration
 - [x] IPFS website publishing and rollback history
-- [ ] ETH payment links, QR codes, and verification
+- [x] ETH payment links, QR codes, and verification
 - [ ] Operator and security guides
 
 Planned interface:
@@ -90,6 +90,19 @@ gwei-name rollback alice REVISION_ID --broadcast
 Successful contenthash transactions are recorded in an owner-only SQLite
 database. The address-to-name cache is public data and also uses SQLite; wallet
 private keys and commit secrets are never stored there.
+
+Payment requests resolve the name's configured ETH address, encode an exact
+amount as a chain-specific [ERC-681](https://eips.ethereum.org/EIPS/eip-681)
+URI, and save a QR code locally:
+
+```console
+gwei-name pay create alice --amount 0.01 --network sepolia
+gwei-name pay verify REQUEST_ID TX_HASH
+```
+
+Verification requires a successful, confirmed transaction whose recipient and
+wei value exactly match the original request. Requests, status, and transaction
+hashes are stored in owner-only local SQLite; the QR PNG is also owner-only.
 
 Commands that change chain state will default to dry-run/preview behavior and
 require explicit confirmation before broadcast.

@@ -110,6 +110,13 @@ NAME_NFT_ABI = [
         ],
         "outputs": [],
     },
+    {
+        "type": "function",
+        "name": "resolve",
+        "stateMutability": "view",
+        "inputs": [{"name": "tokenId", "type": "uint256"}],
+        "outputs": [{"name": "resolved", "type": "address"}],
+    },
 ]
 
 
@@ -193,6 +200,12 @@ class Web3GnsReader:
 
     def contenthash(self, token_id: int) -> bytes:
         return bytes(self.contract.functions.contenthash(token_id).call())
+
+    def resolved_address(self, token_id: int) -> str | None:
+        value = self.contract.functions.resolve(token_id).call()
+        if int(str(value), 16) == 0:
+            return None
+        return Web3.to_checksum_address(value)
 
 
 class Web3GnsWriter(Web3GnsReader):
