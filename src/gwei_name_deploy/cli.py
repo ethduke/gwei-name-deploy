@@ -7,6 +7,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.table import Table
+from web3 import Web3
 
 from gwei_name_deploy import __version__
 from gwei_name_deploy.config import ConfigurationError, Settings
@@ -17,6 +18,7 @@ from gwei_name_deploy.gns import (
     Web3GnsWriter,
     normalize_top_level_name,
     plan_name,
+    token_id_for_label,
 )
 from gwei_name_deploy.history import HistoryError, HistoryStore
 from gwei_name_deploy.inputs import InputError, collect_names
@@ -122,6 +124,58 @@ def plan_command(
     _render_plans(plans, selected_network)
 
 
+@app.command("check")
+def check_command(
+    values: Annotated[
+        list[str],
+        typer.Argument(
+            help="Comma-separated Ethereum addresses or .gwei names to resolve."
+        ),
+    ],
+    network_name: Annotated[
+        str | None, typer.Option("--network", help="Use mainnet or sepolia.")
+    ] = None,
+    rpc_url: Annotated[
+        str | None,
+        typer.Option("--rpc-url", envvar="GWEI_RPC_URL", help="Ethereum RPC URL."),
+    ] = None,
+) -> None:
+    """Resolve addresses to primary .gwei names and names to addresses."""
+    try:
+        settings = Settings.from_env()
+        selected_network = _network_name(network_name, settings)
+        reader = Web3GnsReader(
+            rpc_url or settings.require_rpc_url(), NETWORKS[selected_network]
+        )
+        inputs = _split_check_values(values)
+        results: list[tuple[str, str, str]] = []
+        for value in inputs:
+            if value.lower().startswith("0x"):
+                if not Web3.is_address(value):
+                    raise InputError(f"invalid Ethereum address: {value}")
+                address = Web3.to_checksum_address(value)
+                result = reader.reverse_resolve(address) or "no primary .gwei name"
+                results.append((address, "address → name", result))
+            else:
+                label, name = normalize_top_level_name(value)
+                address = reader.resolved_address(token_id_for_label(label))
+                results.append((name, "name → address", address or "not registered"))
+    except (ConfigurationError, GnsError, InputError, OSError) as exc:
+        _fail(exc)
+
+    table = Table(title=f"GNS checks ({selected_network})")
+    table.add_column("Input", style="bold")
+    table.add_column("Lookup")
+    table.add_column("Result")
+    for input_value, lookup, result in results:
+        table.add_row(input_value, lookup, result)
+    console.print(table)
+    console.print(
+        "[dim]Address lookup returns only the on-chain primary name, "
+        "if configured.[/dim]"
+    )
+
+
 @app.command("register")
 def register_command(
     name: Annotated[
@@ -157,7 +211,7 @@ def register_command(
         settings = Settings.from_env()
         selected_network = _network_name(network_name, settings)
         network = NETWORKS[selected_network]
-        names = collect_names(name, input_file)
+        names = _registration_names(name, input_file, settings)
         endpoint = rpc_url or settings.require_rpc_url()
         reader = Web3GnsReader(endpoint, network)
         plans = [plan_name(reader, candidate) for candidate in names]
@@ -184,7 +238,9 @@ def register_command(
         return
 
     try:
-        writer = Web3GnsWriter(endpoint, network, settings.require_private_key())
+        writer = Web3GnsWriter(
+            endpoint, network, _private_key_for_names(settings, [p.name for p in plans])
+        )
         _confirm_broadcast(selected_network, len(plans), yes)
         run = prepare_run(plans, selected_network, network.chain_id, writer.address)
         store = RunStore(settings.state_dir)
@@ -236,7 +292,7 @@ def resume_command(
         writer = Web3GnsWriter(
             rpc_url or settings.require_rpc_url(),
             network,
-            settings.require_private_key(),
+            _private_key_for_names(settings, [item.name for item in run.items]),
         )
         _confirm_broadcast(run.network, len(run.items), yes)
         commit_pending(run, writer, store.save)
@@ -310,7 +366,9 @@ def publish_command(
         return
 
     try:
-        writer = Web3GnsWriter(endpoint, network, settings.require_private_key())
+        writer = Web3GnsWriter(
+            endpoint, network, _private_key_for_names(settings, [plan.name])
+        )
         if writer.address.lower() != plan.owner.lower():
             raise IpfsError(
                 f"signer {writer.address} does not own {plan.name} ({plan.owner})"
@@ -431,7 +489,9 @@ def rollback_command(
         return
 
     try:
-        writer = Web3GnsWriter(endpoint, network, settings.require_private_key())
+        writer = Web3GnsWriter(
+            endpoint, network, _private_key_for_names(settings, [normalized])
+        )
         if writer.address.lower() != plan.owner.lower():
             raise HistoryError(f"signer {writer.address} does not own {normalized}")
         _confirm_publish(selected_network, normalized, 0, yes)
@@ -584,6 +644,52 @@ def _network_for_chain_id(chain_id: int) -> Network:
         if network.chain_id == chain_id:
             return network
     raise PaymentError(f"unsupported payment request chain ID: {chain_id}")
+
+
+def _split_check_values(values: list[str]) -> list[str]:
+    results = [part.strip() for value in values for part in value.split(",")]
+    results = [value for value in results if value]
+    if not results:
+        raise InputError("provide at least one address or .gwei name")
+    return list(dict.fromkeys(results))
+
+
+def _registration_names(
+    name: str | None, input_file: Path | None, settings: Settings
+) -> list[str]:
+    if name is None and input_file is None and len(settings.accounts) == 1:
+        return [settings.accounts[0].name]
+    if name is None and input_file is None and len(settings.accounts) > 1:
+        raise InputError("multiple GWEI_ACCOUNTS entries; provide the name to register")
+    return collect_names(name, input_file)
+
+
+def _private_key_for_names(settings: Settings, names: list[str]) -> str:
+    if settings.private_key:
+        return settings.private_key
+
+    mapped: dict[str, str] = {}
+    for account in settings.accounts:
+        _, normalized = normalize_top_level_name(account.name)
+        if normalized in mapped:
+            raise ConfigurationError(
+                f"duplicate normalized name in GWEI_ACCOUNTS: {normalized}"
+            )
+        mapped[normalized] = account.private_key
+
+    missing = [name for name in names if name not in mapped]
+    if missing:
+        raise ConfigurationError(
+            "no private key mapping for: "
+            + ", ".join(missing)
+            + "; set GWEI_ACCOUNTS=0xprivatekey:name"
+        )
+    keys = {mapped[name] for name in names}
+    if len(keys) != 1:
+        raise ConfigurationError(
+            "batch names use different private keys; register each name separately"
+        )
+    return keys.pop()
 
 
 def _ensure_registration_budget(plans: list[NamePlan], maximum_eth: str | None) -> None:

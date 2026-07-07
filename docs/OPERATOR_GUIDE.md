@@ -1,53 +1,64 @@
 # Operator Guide
 
-This guide covers the safe path from a fresh checkout to a registered `.gwei`
-name, an IPFS website, and an ETH payment request. Start on Sepolia and use a
-dedicated low-value wallet while evaluating the tool.
+This guide covers the path from a fresh checkout to a registered mainnet
+`.gwei` name, an IPFS website, and an ETH payment request. Use a dedicated
+wallet and review every transaction.
 
 ## Install and configure
 
-Requirements are Python 3.11+, `uv`, an Ethereum RPC endpoint, and either a
+Requirements are Python 3.11+, an Ethereum RPC endpoint, and either a
 local Kubo node or a Pinata account for publishing.
 
 ```console
 git clone https://github.com/ethduke/gwei-name-deploy.git
 cd gwei-name-deploy
-uv sync --dev
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e .
 cp .env.example .env
+chmod 600 .env
 ```
 
-Set `GWEI_RPC_URL` in your shell or load `.env` with your preferred environment
-manager. The CLI does not automatically read `.env`. Keep the default
-`GWEI_NETWORK=sepolia` until the full workflow has been tested.
+The CLI automatically reads the owner-only `.env` in the current directory.
+Configure mainnet and map each private key to the name it should register:
 
-Read-only and dry-run commands do not need `GWEI_PRIVATE_KEY`. Before a write,
-export the key for a dedicated signer in the current shell:
-
-```console
-export GWEI_PRIVATE_KEY='0x...'
+```dotenv
+GWEI_NETWORK=mainnet
+GWEI_RPC_URL=https://your-mainnet-rpc.example
+GWEI_ACCOUNTS=0xprivatekey1:alice.gwei,0xprivatekey2:bob.gwei
 ```
 
-Do not put the key in command history, CLI arguments, source files, CSV files,
-or the website directory. Unset it when the write session is finished.
+Never commit `.env`, pass a key as a CLI argument, or place it in a website
+directory. Use one registration command per mapping when keys differ.
 
 ## Check names and cost
 
 Inspect one name:
 
 ```console
-uv run gwei-name plan alice --network sepolia
+python3 -m gwei_name_deploy plan alice --network mainnet
 ```
 
 For a batch, use a newline-delimited file or a CSV with `name` as the first
 column:
 
 ```console
-uv run gwei-name plan --file names.csv --network sepolia
-uv run gwei-name plan --file names.csv --network sepolia --json
+python3 -m gwei_name_deploy plan --file names.csv --network mainnet
+python3 -m gwei_name_deploy plan --file names.csv --network mainnet --json
 ```
 
 Review normalized names, availability, owner, expiry, and registration value.
 The displayed total excludes gas.
+
+Check forward and reverse resolution in one command:
+
+```console
+python3 -m gwei_name_deploy check 0xAddress1, 0xAddress2, alice.gwei
+```
+
+A name returns its active resolved ETH address. An address returns only its
+explicitly configured on-chain primary `.gwei` name, so an empty reverse result
+does not prove the wallet owns no names.
 
 ## Register and resume
 
@@ -55,14 +66,14 @@ Preview is the default. Add a value ceiling so a fee change cannot exceed the
 operator's budget:
 
 ```console
-uv run gwei-name register alice --network sepolia \
+python3 -m gwei_name_deploy register alice --network mainnet \
   --max-registration-eth 0.01
 ```
 
 After reviewing the plan, send the commitment:
 
 ```console
-uv run gwei-name register alice --network sepolia \
+python3 -m gwei_name_deploy register alice --network mainnet \
   --max-registration-eth 0.01 --broadcast
 ```
 
@@ -74,7 +85,7 @@ secret: back it up to encrypted storage after the commitment confirms.
 Wait at least 60 seconds, but no longer than 24 hours, then reveal:
 
 ```console
-uv run gwei-name resume RUN_ID --broadcast
+python3 -m gwei_name_deploy resume RUN_ID --broadcast
 ```
 
 Both commands are resumable. If the process stops after broadcasting, invoke
@@ -87,7 +98,7 @@ The site must have `index.html` at its root. Preview validates the directory and
 checks current ownership without uploading anything:
 
 ```console
-uv run gwei-name publish alice ./website --network sepolia
+python3 -m gwei_name_deploy publish alice ./website --network mainnet
 ```
 
 For local Kubo, keep its RPC bound to localhost and use:
@@ -95,7 +106,7 @@ For local Kubo, keep its RPC bound to localhost and use:
 ```console
 export GWEI_IPFS_PROVIDER=local
 export GWEI_IPFS_API=http://127.0.0.1:5001
-uv run gwei-name publish alice ./website --network sepolia --broadcast
+python3 -m gwei_name_deploy publish alice ./website --network mainnet --broadcast
 ```
 
 For Pinata, set the token in the environment:
@@ -103,7 +114,7 @@ For Pinata, set the token in the environment:
 ```console
 export GWEI_IPFS_PROVIDER=pinata
 export GWEI_IPFS_TOKEN='...'
-uv run gwei-name publish alice ./website --network sepolia --broadcast
+python3 -m gwei_name_deploy publish alice ./website --network mainnet --broadcast
 ```
 
 The uploader refuses symlinks, environment files, and common key formats, but
@@ -113,8 +124,8 @@ public and may remain available after a later rollback.
 List locally recorded revisions or restore one:
 
 ```console
-uv run gwei-name site-history alice --network sepolia
-uv run gwei-name rollback alice REVISION_ID --network sepolia --broadcast
+python3 -m gwei_name_deploy site-history alice --network mainnet
+python3 -m gwei_name_deploy rollback alice REVISION_ID --network mainnet --broadcast
 ```
 
 Rollback changes the on-chain contenthash; it does not delete the newer IPFS
@@ -126,14 +137,14 @@ Payment creation reads the address resolved by the registered name and stores
 an exact-value, chain-specific ERC-681 request:
 
 ```console
-uv run gwei-name pay create alice --amount 0.01 --network sepolia
+python3 -m gwei_name_deploy pay create alice --amount 0.01 --network mainnet
 ```
 
 Share the printed URI or QR only after independently checking the name,
 recipient, chain, and amount. After payment, verify the transaction:
 
 ```console
-uv run gwei-name pay verify REQUEST_ID TX_HASH
+python3 -m gwei_name_deploy pay verify REQUEST_ID TX_HASH
 ```
 
 Verification accepts only a successful, mined transaction with the exact
@@ -161,9 +172,8 @@ Before upgrading, back up the complete state directory to encrypted storage.
 After upgrading, run:
 
 ```console
-uv sync --dev
-uv run ruff check .
-uv run ruff format --check .
+python3 -m pip install -e .
+python3 -m gwei_name_deploy --help
 ```
 
 For mainnet, repeat the read-only plan immediately before every write, use a

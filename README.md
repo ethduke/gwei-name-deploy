@@ -6,8 +6,7 @@ from a Python command-line tool.
 > [!IMPORTANT]
 > This project is an early, unaffiliated community tool for the
 > [Gwei Name Service](https://gwei.domains/). Transaction-writing features are
-> preview-first and require `--broadcast`. Test the complete workflow on
-> Sepolia before using Ethereum mainnet.
+> preview-first and require `--broadcast`. Review every mainnet transaction.
 
 ## Why
 
@@ -32,6 +31,7 @@ Implemented interface:
 
 ```console
 gwei-name plan alice
+gwei-name check 0xAddress, alice.gwei
 gwei-name register alice
 gwei-name register --file names.csv
 gwei-name publish alice ./website
@@ -43,7 +43,7 @@ The implemented read-only planner accepts one name, a newline-delimited text
 file, or a CSV whose first column is `name`:
 
 ```console
-gwei-name plan alice --network sepolia --rpc-url "$GWEI_RPC_URL"
+python3 -m gwei_name_deploy plan alice --network mainnet
 gwei-name plan --file names.csv --json
 ```
 
@@ -55,19 +55,29 @@ Registration is split so no process must remain alive during the commit/reveal
 delay:
 
 ```console
+# .env contains GWEI_ACCOUNTS=0xprivatekey:alice.gwei
 # Preview only (default)
-gwei-name register alice --network sepolia
+python3 -m gwei_name_deploy register alice --network mainnet
 
 # Sign and send the commitment; writes an owner-only recovery file
-gwei-name register alice --network sepolia --broadcast
+python3 -m gwei_name_deploy register alice --network mainnet --broadcast
 
 # After 60 seconds, recover the run and reveal
-gwei-name resume RUN_ID --broadcast
+python3 -m gwei_name_deploy resume RUN_ID --broadcast
 ```
 
 Use `--file names.csv` for a batch and `--max-registration-eth` to enforce a
 hard cap on registration value. Each top-level reveal must be sent directly by
 the intended owner because the GNS contract binds and mints to `msg.sender`.
+
+Bidirectional checks use the GNS contract directly:
+
+```console
+python3 -m gwei_name_deploy check 0xAddress1, 0xAddress2, alice.gwei
+```
+
+Names resolve to their active ETH address. Addresses resolve only to an
+explicitly configured on-chain primary `.gwei` name.
 
 Website publishing supports a local Kubo node or Pinata. It refuses symlinks,
 environment files, private-key-like files, and directories without a root
@@ -75,16 +85,16 @@ environment files, private-key-like files, and directories without a root
 
 ```console
 # Inspect files and ownership without uploading
-gwei-name publish alice examples/minimal-site --network sepolia
+python3 -m gwei_name_deploy publish alice examples/minimal-site --network mainnet
 
 # Publish through local Kubo (localhost:5001 by default)
-gwei-name publish alice ./website --broadcast
+python3 -m gwei_name_deploy publish alice ./website --broadcast
 
 # Or use Pinata with GWEI_IPFS_TOKEN set
-gwei-name publish alice ./website --provider pinata --broadcast
+python3 -m gwei_name_deploy publish alice ./website --provider pinata --broadcast
 
-gwei-name site-history alice
-gwei-name rollback alice REVISION_ID --broadcast
+python3 -m gwei_name_deploy site-history alice
+python3 -m gwei_name_deploy rollback alice REVISION_ID --broadcast
 ```
 
 Successful contenthash transactions and the address-to-name mapping are stored
@@ -96,8 +106,8 @@ amount as a chain-specific [ERC-681](https://eips.ethereum.org/EIPS/eip-681)
 URI, and save a QR code locally:
 
 ```console
-gwei-name pay create alice --amount 0.01 --network sepolia
-gwei-name pay verify REQUEST_ID TX_HASH
+python3 -m gwei_name_deploy pay create alice --amount 0.01 --network mainnet
+python3 -m gwei_name_deploy pay verify REQUEST_ID TX_HASH
 ```
 
 Verification requires a successful, confirmed transaction whose recipient and
@@ -109,17 +119,18 @@ require explicit confirmation before broadcast.
 
 ## Development
 
-Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Requirements: Python 3.11+.
 
 ```console
-uv sync --dev
-uv run gwei-name --help
-uv run ruff check .
-uv run ruff format --check .
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e .
+python3 -m gwei_name_deploy --help
 ```
 
-Copy `.env.example` to `.env` for local configuration. `.env`, run state,
-commitment secrets, generated sites, and payment artifacts are ignored by Git.
+Copy `.env.example` to `.env`, run `chmod 600 .env`, and add the RPC plus account
+mappings. The CLI loads this file automatically. `.env`, run state, commitment
+secrets, generated sites, and payment artifacts are ignored by Git.
 See the [operator guide](docs/OPERATOR_GUIDE.md) for an end-to-end workflow and
 [security policy](SECURITY.md) for the trust model and reporting process.
 
@@ -127,9 +138,10 @@ See the [operator guide](docs/OPERATOR_GUIDE.md) for an end-to-end workflow and
 
 | Variable | Purpose |
 | --- | --- |
-| `GWEI_NETWORK` | `sepolia` by default; `mainnet` must be explicit |
+| `GWEI_NETWORK` | `mainnet` by default |
 | `GWEI_RPC_URL` | Ethereum JSON-RPC endpoint |
-| `GWEI_PRIVATE_KEY` | Local transaction signer; never pass via CLI |
+| `GWEI_ACCOUNTS` | Comma-separated `0xprivatekey:name` mappings |
+| `GWEI_PRIVATE_KEY` | Optional legacy single-signer fallback |
 | `GWEI_STATE_DIR` | Optional local state directory override |
 | `GWEI_IPFS_PROVIDER` | IPFS adapter: `local` or `pinata` |
 | `GWEI_IPFS_API` | Local Kubo RPC; localhost only |

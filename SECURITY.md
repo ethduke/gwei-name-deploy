@@ -2,7 +2,7 @@
 
 Gwei Name Deploy signs transactions, persists commit/reveal secrets, uploads
 public content, and creates payment requests. Treat it as pre-1.0 software and
-test every workflow with a dedicated low-value wallet on Sepolia first.
+use a dedicated wallet with only the funds required for the intended operation.
 
 ## Supported versions
 
@@ -26,8 +26,9 @@ real secret, even privately.
 - GNS ownership, availability, fees, resolution, and transaction outcomes come
   from the configured JSON-RPC endpoint. A dishonest or stale RPC can mislead
   the operator; use a trusted endpoint and independently inspect transactions.
-- `GWEI_PRIVATE_KEY` is read from the process environment and used only for
-  local signing. This is an MVP compromise, not a durable secret store. A
+- `GWEI_ACCOUNTS` is read from an owner-only `.env` and used only for local
+  signing. The `0xprivatekey:name` mapping is an MVP compromise, not a durable
+  secret store. A
   hardware wallet, OS keychain, or encrypted JSON keystore signer is preferred
   for future releases.
 - Registration recovery files contain random commitment secrets. They are

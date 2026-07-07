@@ -117,6 +117,13 @@ NAME_NFT_ABI = [
         "inputs": [{"name": "tokenId", "type": "uint256"}],
         "outputs": [{"name": "resolved", "type": "address"}],
     },
+    {
+        "type": "function",
+        "name": "reverseResolve",
+        "stateMutability": "view",
+        "inputs": [{"name": "addr", "type": "address"}],
+        "outputs": [{"name": "fullName", "type": "string"}],
+    },
 ]
 
 
@@ -206,6 +213,14 @@ class Web3GnsReader:
         if int(str(value), 16) == 0:
             return None
         return Web3.to_checksum_address(value)
+
+    def reverse_resolve(self, address: str) -> str | None:
+        value = str(
+            self.contract.functions.reverseResolve(
+                Web3.to_checksum_address(address)
+            ).call()
+        )
+        return value or None
 
 
 class Web3GnsWriter(Web3GnsReader):
